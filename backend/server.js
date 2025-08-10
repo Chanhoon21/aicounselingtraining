@@ -29,7 +29,7 @@ let scenarios = [
 
 // CORS 설정
 app.use(cors({
-  origin: ['http://localhost:3000', 'https://aicounselingtraining-1.onrender.com'],
+  origin: ['http://localhost:3000', 'https://aicounselingtraining.onrender.com'],
   credentials: true
 }));
 
