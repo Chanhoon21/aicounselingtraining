@@ -11,6 +11,12 @@ export class WebRTCManager {
     this.onMessage = null;
     this.scenario = null;
     this.clientBackground = null;
+
+    // recording (mixed)
+    this.recCtx = null;
+    this.recDest = null;
+    this.recorder = null;
+    this.recordedChunks = [];
   }
 
   async initializeConnection(ephemeralKey, scenario, clientBackground) {
@@ -18,7 +24,7 @@ export class WebRTCManager {
       this.scenario = scenario;
       this.clientBackground = clientBackground;
 
-      // RTCPeerConnection 생성
+      // RTCPeerConnection
       this.peerConnection = new RTCPeerConnection({
         iceServers: [
           { urls: 'stun:stun.l.google.com:19302' },
@@ -26,7 +32,7 @@ export class WebRTCManager {
         ]
       });
 
-      // 로컬 스트림 가져오기 (마이크)
+      // Local mic
       this.localStream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
@@ -34,69 +40,59 @@ export class WebRTCManager {
           autoGainControl: true
         }
       });
-
-      // 로컬 스트림을 피어 커넥션에 추가
       this.localStream.getTracks().forEach(track => {
         this.peerConnection.addTrack(track, this.localStream);
       });
 
-      // 원격 스트림 처리
+      // Remote stream
       this.peerConnection.ontrack = (event) => {
         this.remoteStream = event.streams[0];
         this.playRemoteAudio();
-        if (this.onTrack) {
-          this.onTrack(event);
-        }
+        if (this.onTrack) this.onTrack(event);
       };
 
-      // 연결 상태 변경 이벤트
+      // State
       this.peerConnection.onconnectionstatechange = () => {
-        console.log('연결 상태:', this.peerConnection.connectionState);
         if (this.onConnectionStateChange) {
           this.onConnectionStateChange(this.peerConnection.connectionState);
         }
       };
 
-      // ICE 후보 이벤트
       this.peerConnection.onicecandidate = (event) => {
         if (event.candidate) {
-          console.log('ICE 후보:', event.candidate);
+          console.log('ICE candidate:', event.candidate);
         }
       };
 
-      // 데이터 채널 설정
+      // Data channel
       this.dataChannel = this.peerConnection.createDataChannel('oai-events');
       this.dataChannel.addEventListener('open', () => {
         console.log('Data channel open');
-        // 1) 시나리오를 세션 인스트럭션으로 적용
+        // 1) apply session instructions
         this.sendSessionUpdate();
-        // 2) Set initial emotional tone and create first response
+        // 2) initial response (audio + text)
         const initialEmotion = this.determineInitialEmotion();
         this.dataChannel.send(JSON.stringify({
           type: 'response.create',
           response: {
-            modalities: ['audio'],
+            modalities: ['audio','text'],
             instructions: `Start with a greeting and briefly explain why you came for counseling. ${initialEmotion}`
           }
         }));
       });
+
       this.dataChannel.addEventListener('message', (event) => {
         try {
           const data = JSON.parse(event.data);
-          console.log('Realtime API 이벤트:', data);
-          if (this.onMessage) {
-            this.onMessage(data);
-          }
+          if (this.onMessage) this.onMessage(data);
         } catch (error) {
-          console.error('메시지 파싱 오류:', error);
+          console.error('Message parse error:', error);
         }
       });
 
-      // OpenAI Realtime API와 연결
+      // Offer/Answer
       const model = 'gpt-4o-realtime-preview-2025-06-03';
       const baseUrl = 'https://api.openai.com/v1/realtime';
-      
-      // SDP offer 생성
       const offer = await this.peerConnection.createOffer();
       await this.peerConnection.setLocalDescription(offer);
 
@@ -108,25 +104,16 @@ export class WebRTCManager {
           'Content-Type': 'application/sdp'
         },
       });
-
       if (!sdpResponse.ok) {
         const errorText = await sdpResponse.text();
-        throw new Error(`OpenAI Realtime API 연결 실패: ${sdpResponse.status} - ${errorText}`);
+        throw new Error(`OpenAI Realtime connect failed: ${sdpResponse.status} - ${errorText}`);
       }
-
       const answerSdp = await sdpResponse.text();
-      const answer = {
-        type: 'answer',
-        sdp: answerSdp,
-      };
-      
-      await this.peerConnection.setRemoteDescription(answer);
-
-      // 시나리오는 dataChannel 'open'에서 session.update로 전송하므로 타이머 불필요
+      await this.peerConnection.setRemoteDescription({ type: 'answer', sdp: answerSdp });
 
       return this.peerConnection;
     } catch (error) {
-      console.error('WebRTC 초기화 오류:', error);
+      console.error('WebRTC init error:', error);
       throw error;
     }
   }
@@ -150,7 +137,6 @@ Voice & Prosody Guidelines:
 - Keep replies conversational (1-3 sentences) unless asked to elaborate
 - Show gradual emotional changes as the session progresses
 - Speak only from your first-person perspective as the client`;
-      
       this.dataChannel.send(JSON.stringify({
         type: 'session.update',
         session: { instructions }
@@ -164,23 +150,56 @@ Voice & Prosody Guidelines:
       this.audioElement.srcObject = this.remoteStream;
       this.audioElement.autoplay = true;
       this.audioElement.volume = 0.8;
-      
       this.audioElement.onloadedmetadata = () => {
-        console.log('원격 오디오 스트림 준비됨');
+        console.log('Remote audio ready');
       };
-
       this.audioElement.onerror = (error) => {
-        console.error('오디오 재생 오류:', error);
+        console.error('Audio error:', error);
       };
     }
   }
 
+  // Mixed session recording (mic + AI)
+  startMixedRecording() {
+    if (!this.localStream || !this.remoteStream) throw new Error('Not connected');
+    const AC = window.AudioContext || window.webkitAudioContext;
+    this.recCtx = new AC();
+    this.recDest = this.recCtx.createMediaStreamDestination();
+    const mic = this.recCtx.createMediaStreamSource(this.localStream);
+    const ai  = this.recCtx.createMediaStreamSource(this.remoteStream);
+    mic.connect(this.recDest);
+    ai.connect(this.recDest);
+
+    const mixed = this.recDest.stream;
+    let mimeType = '';
+    if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) mimeType = 'audio/webm;codecs=opus';
+    else if (MediaRecorder.isTypeSupported('audio/webm')) mimeType = 'audio/webm';
+    else if (MediaRecorder.isTypeSupported('audio/mp4')) mimeType = 'audio/mp4';
+    this.recordedChunks = [];
+    this.recorder = new MediaRecorder(mixed, mimeType ? { mimeType } : undefined);
+    this.recorder.ondataavailable = (e) => { if (e.data && e.data.size) this.recordedChunks.push(e.data); };
+    this.recorder.start(1000);
+  }
+
+  stopMixedRecording() {
+    return new Promise((resolve) => {
+      if (!this.recorder) return resolve(null);
+      this.recorder.onstop = () => {
+        const type = this.recorder.mimeType || 'audio/webm';
+        const blob = new Blob(this.recordedChunks, { type });
+        const url = URL.createObjectURL(blob);
+        try { this.recCtx?.close(); } catch {}
+        this.recCtx = null; this.recDest = null; this.recorder = null; this.recordedChunks = [];
+        resolve({ blob, url, mime: type });
+      };
+      this.recorder.stop();
+    });
+  }
+
   determineInitialEmotion() {
     if (!this.scenario || !this.clientBackground) return '';
-    
     const scenario = this.scenario.toLowerCase();
     const background = this.clientBackground.toLowerCase();
-    
     if (scenario.includes('depression') || scenario.includes('sad') || background.includes('depression')) {
       return 'Speak with a slower pace, softer volume, and slight shakiness. Include small sighs or pauses.';
     } else if (scenario.includes('anxiety') || scenario.includes('anxious') || background.includes('anxiety') || scenario.includes('stress')) {
@@ -194,7 +213,6 @@ Voice & Prosody Guidelines:
 
   setEmotion(emotion) {
     if (!this.dataChannel || this.dataChannel.readyState !== 'open') return;
-
     const emotionalStyles = {
       sad: "soft, slower pace, slight shakiness; include brief pauses and occasional sighs",
       anxious: "faster pace, tighter phrasing; audible tension and shallow breaths",
@@ -205,13 +223,11 @@ Voice & Prosody Guidelines:
       confused: "slower, more hesitant; questioning tone with pauses",
       neutral: "even pace, clear and calm; natural conversational flow"
     };
-
     const style = emotionalStyles[emotion] || emotionalStyles.neutral;
-
     this.dataChannel.send(JSON.stringify({
       type: 'response.create',
       response: {
-        modalities: ['audio'],
+        modalities: ['audio','text'],
         instructions: `For your next response, speak with this emotional tone: ${style}. Keep it conversational and brief.`
       }
     }));
@@ -221,27 +237,27 @@ Voice & Prosody Guidelines:
     if (this.dataChannel && this.dataChannel.readyState === 'open') {
       this.dataChannel.send(JSON.stringify(message));
     } else {
-      console.warn('데이터 채널이 준비되지 않았습니다.');
+      console.warn('Data channel not ready.');
     }
   }
 
   stopConnection() {
+    if (this.recorder && this.recorder.state !== 'inactive') {
+      try { this.recorder.stop(); } catch {}
+    }
     if (this.localStream) {
       this.localStream.getTracks().forEach(track => track.stop());
       this.localStream = null;
     }
-
     if (this.peerConnection) {
       this.peerConnection.close();
       this.peerConnection = null;
     }
-
     if (this.audioElement) {
       this.audioElement.pause();
       this.audioElement.srcObject = null;
       this.audioElement = null;
     }
-
     this.remoteStream = null;
     this.dataChannel = null;
     this.scenario = null;
@@ -249,7 +265,7 @@ Voice & Prosody Guidelines:
   }
 
   isConnected() {
-    return this.peerConnection && 
+    return this.peerConnection &&
            this.peerConnection.connectionState === 'connected';
   }
 
