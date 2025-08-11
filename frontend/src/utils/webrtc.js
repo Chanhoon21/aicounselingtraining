@@ -70,7 +70,7 @@ export class WebRTCManager {
         console.log('Data channel open');
         // 1) apply session instructions
         this.sendSessionUpdate();
-        // 2) initial response (audio + text)
+        // 2) initial reply (audio + text so we can log)
         const initialEmotion = this.determineInitialEmotion();
         this.dataChannel.send(JSON.stringify({
           type: 'response.create',
@@ -90,7 +90,7 @@ export class WebRTCManager {
         }
       });
 
-      // Offer/Answer
+      // Offer/Answer to OpenAI Realtime
       const model = 'gpt-4o-realtime-preview-2025-06-03';
       const baseUrl = 'https://api.openai.com/v1/realtime';
       const offer = await this.peerConnection.createOffer();
@@ -174,7 +174,7 @@ Voice & Prosody Guidelines:
     let mimeType = '';
     if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) mimeType = 'audio/webm;codecs=opus';
     else if (MediaRecorder.isTypeSupported('audio/webm')) mimeType = 'audio/webm';
-    else if (MediaRecorder.isTypeSupported('audio/mp4')) mimeType = 'audio/mp4';
+    else if (MediaRecorder.isTypeSupported('audio/mp4')) mimeType = 'audio/mp4'; // Safari
     this.recordedChunks = [];
     this.recorder = new MediaRecorder(mixed, mimeType ? { mimeType } : undefined);
     this.recorder.ondataavailable = (e) => { if (e.data && e.data.size) this.recordedChunks.push(e.data); };
