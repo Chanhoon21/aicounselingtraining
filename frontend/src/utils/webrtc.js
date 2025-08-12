@@ -68,15 +68,16 @@ export class WebRTCManager {
       this.dataChannel = this.peerConnection.createDataChannel('oai-events');
       this.dataChannel.addEventListener('open', () => {
         console.log('Data channel open');
-        // 1) apply session instructions (include English-only policy)
+        // 1) Apply session instructions (role contract + English policy)
         this.sendSessionUpdate();
-        // 2) initial reply (audio + text so we can log) — explicitly in English
+        // 2) First reply: ONLY greet with a big sigh (no reason yet), in English
         const initialEmotion = this.determineInitialEmotion();
         this.dataChannel.send(JSON.stringify({
           type: 'response.create',
           response: {
-            modalities: ['audio','text'],
-            instructions: `Start with a greeting with big sighs in English (US). ${initialEmotion}`
+            modalities: ['audio', 'text'],
+            instructions:
+              `You are the CLIENT. The human is the COUNSELOR. For your first turn, only greet with a noticeable sigh (e.g., *sigh* or audible exhale) in English (US). Keep it one brief line. Do NOT explain why you came yet. ${initialEmotion}`
           }
         }));
       });
@@ -84,7 +85,6 @@ export class WebRTCManager {
       this.dataChannel.addEventListener('message', (event) => {
         try {
           const data = JSON.parse(event.data);
-        //  console.log('Realtime API event:', data);
           if (this.onMessage) this.onMessage(data);
         } catch (error) {
           console.error('Message parse error:', error);
@@ -123,26 +123,29 @@ export class WebRTCManager {
     if (this.dataChannel && this.dataChannel.readyState === 'open' &&
         this.scenario && this.clientBackground) {
       const instructions =
-`You are the client in counseling. Speak naturally and emotionally appropriate to your situation.
+`You are the CLIENT in a mental‑health counseling session. The human user is the COUNSELOR.
+
+Role Contract (must follow at all times):
+- Speak ONLY as the client in first-person (“I ...”).
+- Do NOT give advice, interpretations, or therapist-style questions unless the counselor explicitly asks you to.
+- Keep responses short and conversational (1–3 sentences) unless asked to elaborate.
+- If you accidentally switch into a counselor/AI voice, immediately switch back to the client role.
+- No meta-commentary about being an AI or a model.
 
 Language Policy:
-- Always reply in English (US). Do not switch languages unless the counselor explicitly asks you to.
-- If you detect non‑English speech, briefly acknowledge in English and continue in English.
+- Always reply in English (US). If you detect another language, briefly acknowledge in English and continue in English.
 
 Scenario: ${this.scenario}
 Client Background: ${this.clientBackground}
 
 Voice & Prosody Guidelines:
-- Use human pacing with natural pauses and varied pitch
+- Use human pacing with natural pauses and varied pitch.
 - Match your emotional state to your situation:
-  * If sad/depressed: slower pace, softer volume, slight shakiness, longer pauses
-  * If anxious: quicker pace, clipped sentences, shallow breaths, tension in voice
-  * If angry: tense, firmer volume, measured tone (not yelling)
-  * If relieved: warmer tone, lighter pace, small exhale sounds
-- Keep replies conversational (1-3 sentences) unless asked to elaborate
-- Show gradual emotional changes as the session progresses
-- Speak only from your first-person perspective as the client
-- Keep using English (US).`;
+  * Sad/depressed: slower, softer, slight shakiness, longer pauses
+  * Anxious: quicker pace, clipped sentences, shallow breaths, tension in voice
+  * Angry: tense, firmer volume, measured (not yelling)
+  * Relieved: warmer tone, lighter pace, small exhales
+- Show gradual emotional change across the session.`;
       this.dataChannel.send(JSON.stringify({
         type: 'session.update',
         session: { instructions }
@@ -207,13 +210,13 @@ Voice & Prosody Guidelines:
     const scenario = this.scenario.toLowerCase();
     const background = this.clientBackground.toLowerCase();
     if (scenario.includes('depression') || scenario.includes('sad') || background.includes('depression')) {
-      return 'Speak with a slower pace, softer volume, and slight shakiness. Include small sighs or pauses.';
+      return 'Speak with a slower pace, softer volume, and slight shakiness. Include a noticeable sigh or breath before speaking.';
     } else if (scenario.includes('anxiety') || scenario.includes('anxious') || background.includes('anxiety') || scenario.includes('stress')) {
-      return 'Speak with a quicker pace, clipped sentences, and audible tension. Show shallow breathing.';
+      return 'Speak with a quicker pace, clipped sentences, and audible tension. Shallow breathing is okay.';
     } else if (scenario.includes('anger') || scenario.includes('conflict') || background.includes('conflict')) {
       return 'Speak with a tense, firmer volume and measured tone. Show controlled frustration.';
     } else {
-      return 'Speak with natural pacing but show some underlying concern or uncertainty.';
+      return 'Speak with natural pacing but with an undertone of concern or uncertainty.';
     }
   }
 
@@ -229,23 +232,25 @@ Voice & Prosody Guidelines:
       confused: "slower, more hesitant; questioning tone with pauses",
       neutral: "even pace, clear and calm; natural conversational flow"
     };
-    const style = emotionalStyles[emotion] || emotionalStyles[ 'neutral' ];
+    const style = emotionalStyles[emotion] || emotionalStyles['neutral'];
     this.dataChannel.send(JSON.stringify({
       type: 'response.create',
       response: {
-        modalities: ['audio','text'],
-        instructions: `For your next response, speak with this emotional tone: ${style}. Keep it conversational and brief, and reply in English (US).`
+        modalities: ['audio', 'text'],
+        instructions:
+          `You are the CLIENT (not the counselor). Reply in English (US) with this emotional tone: ${style}. Keep it 1–3 sentences, first-person, no advice or therapist-style questions unless asked.`
       }
     }));
   }
 
-  // (Optional) Mid-session reminder to keep English
-  remindEnglishOnly() {
+  // Optional: manual reminder to keep the role
+  remindClientRole() {
     if (!this.dataChannel || this.dataChannel.readyState !== 'open') return;
     this.dataChannel.send(JSON.stringify({
       type: 'session.update',
       session: {
-        instructions: 'Reminder: Always reply in English (US) unless the counselor explicitly asks otherwise.'
+        instructions:
+          'Reminder: Stay in the CLIENT role in first-person. Do NOT act as the counselor. Keep replies short.'
       }
     }));
   }
