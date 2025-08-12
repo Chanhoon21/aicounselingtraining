@@ -68,15 +68,15 @@ export class WebRTCManager {
       this.dataChannel = this.peerConnection.createDataChannel('oai-events');
       this.dataChannel.addEventListener('open', () => {
         console.log('Data channel open');
-        // 1) apply session instructions
+        // 1) apply session instructions (include English-only policy)
         this.sendSessionUpdate();
-        // 2) initial reply (audio + text so we can log)
+        // 2) initial reply (audio + text so we can log) — explicitly in English
         const initialEmotion = this.determineInitialEmotion();
         this.dataChannel.send(JSON.stringify({
           type: 'response.create',
           response: {
             modalities: ['audio','text'],
-            instructions: `Start with a greeting and briefly explain why you came for counseling. ${initialEmotion}`
+            instructions: `Start with a greeting and briefly explain why you came for counseling, in English (US). ${initialEmotion}`
           }
         }));
       });
@@ -84,6 +84,7 @@ export class WebRTCManager {
       this.dataChannel.addEventListener('message', (event) => {
         try {
           const data = JSON.parse(event.data);
+        //  console.log('Realtime API event:', data);
           if (this.onMessage) this.onMessage(data);
         } catch (error) {
           console.error('Message parse error:', error);
@@ -124,6 +125,10 @@ export class WebRTCManager {
       const instructions =
 `You are the client in counseling. Speak naturally and emotionally appropriate to your situation.
 
+Language Policy:
+- Always reply in English (US). Do not switch languages unless the counselor explicitly asks you to.
+- If you detect non‑English speech, briefly acknowledge in English and continue in English.
+
 Scenario: ${this.scenario}
 Client Background: ${this.clientBackground}
 
@@ -136,7 +141,8 @@ Voice & Prosody Guidelines:
   * If relieved: warmer tone, lighter pace, small exhale sounds
 - Keep replies conversational (1-3 sentences) unless asked to elaborate
 - Show gradual emotional changes as the session progresses
-- Speak only from your first-person perspective as the client`;
+- Speak only from your first-person perspective as the client
+- Keep using English (US).`;
       this.dataChannel.send(JSON.stringify({
         type: 'session.update',
         session: { instructions }
@@ -223,12 +229,23 @@ Voice & Prosody Guidelines:
       confused: "slower, more hesitant; questioning tone with pauses",
       neutral: "even pace, clear and calm; natural conversational flow"
     };
-    const style = emotionalStyles[emotion] || emotionalStyles.neutral;
+    const style = emotionalStyles[emotion] || emotionalStyles[ 'neutral' ];
     this.dataChannel.send(JSON.stringify({
       type: 'response.create',
       response: {
         modalities: ['audio','text'],
-        instructions: `For your next response, speak with this emotional tone: ${style}. Keep it conversational and brief.`
+        instructions: `For your next response, speak with this emotional tone: ${style}. Keep it conversational and brief, and reply in English (US).`
+      }
+    }));
+  }
+
+  // (Optional) Mid-session reminder to keep English
+  remindEnglishOnly() {
+    if (!this.dataChannel || this.dataChannel.readyState !== 'open') return;
+    this.dataChannel.send(JSON.stringify({
+      type: 'session.update',
+      session: {
+        instructions: 'Reminder: Always reply in English (US) unless the counselor explicitly asks otherwise.'
       }
     }));
   }
