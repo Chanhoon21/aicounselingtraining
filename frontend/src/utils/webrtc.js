@@ -74,7 +74,7 @@ export class WebRTCManager {
         console.log('Data channel open');
         // 1) Apply session instructions (role contract + English policy)
         this.sendSessionUpdate();
-        // 2) First reply: ONLY greet with a big sigh (no reason yet), in English
+        // 2) First reply: ONLY greet (no reason yet), in English
         const initialEmotion = this.determineInitialEmotion();
         this.dataChannel.send(JSON.stringify({
           type: 'response.create',
