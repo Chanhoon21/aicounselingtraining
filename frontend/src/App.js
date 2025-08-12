@@ -48,12 +48,17 @@ function App() {
   const [userApiKey, setUserApiKey] = useState('');
 
   // Conversation log (AI text) + recording/transcription
-  const [log, setLog] = useState([]);           // {role:'ai'|'session_transcript', text, t}
+  const [log, setLog] = useState([]);           // {role:'ai'|'session_transcript'|'client'|'counselor', text, t}
   const aiBuffers = useRef({});                  // assemble AI text per response
   const [isSavingAudio, setIsSavingAudio] = useState(false);
   const [audioUrl, setAudioUrl] = useState(null);
   const [audioBlob, setAudioBlob] = useState(null);
   const [transcriptLanguage, setTranscriptLanguage] = useState('auto'); // 'auto' | 'en' | 'ko'
+
+  // Dual recording state
+  const [dualRecOn, setDualRecOn] = useState(false);
+  const [micBlob, setMicBlob] = useState(null);
+  const [aiBlob, setAiBlob] = useState(null);
 
   // Load scenarios
   useEffect(() => { fetchScenarios(); }, []);
@@ -171,9 +176,12 @@ function App() {
   const stopCounseling = () => {
     webrtcManager.stopConnection();
     setIsSavingAudio(false);
+    setDualRecOn(false);
     if (audioUrl) { try { URL.revokeObjectURL(audioUrl); } catch {} }
     setAudioUrl(null);
     setAudioBlob(null);
+    setMicBlob(null);
+    setAiBlob(null);
     setIsRecording(false);
     setIsConnected(false);
     setEphemeralKey(null);
@@ -224,7 +232,7 @@ function App() {
     URL.revokeObjectURL(url);
   };
 
-  // Transcribe the recorded audio with gpt-4o-mini-transcribe
+  // Transcribe the mixed recording with gpt-4o-mini-transcribe
   const transcribeRecording = async () => {
     if (!audioBlob) return showSnackbar('No recorded audio to transcribe.', 'warning');
     if (!userApiKey.trim()) return showSnackbar('Enter your OpenAI API key first.', 'warning');
@@ -236,10 +244,7 @@ function App() {
       if (transcriptLanguage && transcriptLanguage !== 'auto') {
         form.append('language', transcriptLanguage);
       }
-      const r = await fetch(`${API_BASE_URL}/transcribe`, {
-        method: 'POST',
-        body: form
-      });
+      const r = await fetch(`${API_BASE_URL}/transcribe`, { method: 'POST', body: form });
       const data = await r.json();
       if (!r.ok) {
         console.error('Transcription error:', data);
@@ -255,6 +260,34 @@ function App() {
     } catch (e) {
       console.error(e);
       showSnackbar('Transcription request failed.', 'error');
+    }
+  };
+
+  // Transcribe both (labeled counselor/client)
+  const transcribeDual = async () => {
+    if (!micBlob || !aiBlob) return showSnackbar('Record dual tracks first.', 'warning');
+    if (!userApiKey.trim()) return showSnackbar('Enter your OpenAI API key first.', 'warning');
+    try {
+      const form = new FormData();
+      form.append('apiKey', userApiKey.trim());
+      form.append('audio_mic', micBlob, 'counselor.webm');
+      form.append('audio_ai', aiBlob, 'client.webm');
+      if (transcriptLanguage && transcriptLanguage !== 'auto') {
+        form.append('language', transcriptLanguage);
+      }
+      const r = await fetch(`${API_BASE_URL}/transcribe-dual`, { method: 'POST', body: form });
+      const data = await r.json();
+      if (!r.ok) {
+        console.error('Dual transcription error:', data);
+        return showSnackbar(data.error || 'Dual transcription failed.', 'error');
+      }
+      const now = Date.now();
+      if (data.client)    setLog(prev => [...prev, { role: 'client',    text: (data.client||'').trim(),    t: now }]);
+      if (data.counselor) setLog(prev => [...prev, { role: 'counselor', text: (data.counselor||'').trim(), t: now }]);
+      showSnackbar('Dual transcription complete (labeled).', 'success');
+    } catch (e) {
+      console.error(e);
+      showSnackbar('Dual transcription request failed.', 'error');
     }
   };
 
@@ -423,13 +456,14 @@ function App() {
 
                   {/* Recording & Downloads */}
                   <Box sx={{ mt: 2, display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+                    {/* Mixed track controls */}
                     <Button
                       variant="outlined"
                       onClick={isSavingAudio ? stopSavingAudio : startSavingAudio}
                       disabled={!isRecording}
                       fullWidth
                     >
-                      {isSavingAudio ? 'Stop & Prepare Audio' : 'Start Recording Audio'}
+                      {isSavingAudio ? 'Stop & Prepare Audio' : 'Start Recording Audio (mixed)'}
                     </Button>
 
                     <Button
@@ -444,7 +478,7 @@ function App() {
                         a.click();
                       }}
                     >
-                      Download Audio
+                      Download Mixed Audio
                     </Button>
 
                     <Button
@@ -453,7 +487,55 @@ function App() {
                       fullWidth
                       onClick={transcribeRecording}
                     >
-                      Transcribe Recording (gpt-4o-mini-transcribe)
+                      Transcribe Mixed (gpt-4o-mini-transcribe)
+                    </Button>
+
+                    {/* Dual track controls */}
+                    <Button
+                      variant="outlined"
+                      onClick={async () => {
+                        try {
+                          webrtcManager.startDualRecording();
+                          setDualRecOn(true);
+                          showSnackbar('Dual recording started (Counselor/Client).', 'info');
+                        } catch (e) {
+                          console.error(e);
+                          showSnackbar('Cannot start dual recording.', 'error');
+                        }
+                      }}
+                      disabled={!isRecording || dualRecOn}
+                      fullWidth
+                    >
+                      Start Dual Recording (separate)
+                    </Button>
+
+                    <Button
+                      variant="outlined"
+                      onClick={async () => {
+                        try {
+                          const out = await webrtcManager.stopDualRecording();
+                          setDualRecOn(false);
+                          if (out?.mic?.blob) setMicBlob(out.mic.blob);
+                          if (out?.ai?.blob) setAiBlob(out.ai.blob);
+                          showSnackbar('Dual recording ready.', 'success');
+                        } catch (e) {
+                          console.error(e);
+                          showSnackbar('Failed to stop dual recording.', 'error');
+                        }
+                      }}
+                      disabled={!dualRecOn}
+                      fullWidth
+                    >
+                      Stop Dual Recording
+                    </Button>
+
+                    <Button
+                      variant="outlined"
+                      onClick={transcribeDual}
+                      disabled={!micBlob || !aiBlob}
+                      fullWidth
+                    >
+                      Transcribe Both (labeled)
                     </Button>
 
                     <Button variant="text" onClick={() => downloadTranscript('txt')} disabled={!log.length}>

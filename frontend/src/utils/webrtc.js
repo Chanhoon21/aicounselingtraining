@@ -17,6 +17,14 @@ export class WebRTCManager {
     this.recDest = null;
     this.recorder = null;
     this.recordedChunks = [];
+
+    // recording (dual: mic/client separated)
+    this.micRecorder = null;
+    this.aiRecorder = null;
+    this.micChunks = [];
+    this.aiChunks = [];
+    this.micBlob = null;
+    this.aiBlob = null;
   }
 
   async initializeConnection(ephemeralKey, scenario, clientBackground) {
@@ -34,11 +42,7 @@ export class WebRTCManager {
 
       // Local mic
       this.localStream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true
-        }
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
       });
       this.localStream.getTracks().forEach(track => {
         this.peerConnection.addTrack(track, this.localStream);
@@ -205,6 +209,61 @@ Voice & Prosody Guidelines:
     });
   }
 
+  // Dual recording (separate mic/client tracks)
+  startDualRecording() {
+    if (!this.localStream || !this.remoteStream) throw new Error('Not connected');
+
+    let mimeType = '';
+    if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) mimeType = 'audio/webm;codecs=opus';
+    else if (MediaRecorder.isTypeSupported('audio/webm')) mimeType = 'audio/webm';
+    else if (MediaRecorder.isTypeSupported('audio/mp4')) mimeType = 'audio/mp4'; // Safari
+
+    // Mic-only
+    this.micChunks = [];
+    this.micRecorder = new MediaRecorder(this.localStream, mimeType ? { mimeType } : undefined);
+    this.micRecorder.ondataavailable = (e) => { if (e.data?.size) this.micChunks.push(e.data); };
+    this.micRecorder.start(1000);
+
+    // AI-only (remote)
+    const aiOnly = new MediaStream();
+    const remoteAudioTracks = this.remoteStream.getAudioTracks();
+    if (remoteAudioTracks.length) aiOnly.addTrack(remoteAudioTracks[0]);
+
+    this.aiChunks = [];
+    this.aiRecorder = new MediaRecorder(aiOnly, mimeType ? { mimeType } : undefined);
+    this.aiRecorder.ondataavailable = (e) => { if (e.data?.size) this.aiChunks.push(e.data); };
+    this.aiRecorder.start(1000);
+  }
+
+  stopDualRecording() {
+    return new Promise((resolve) => {
+      const done = { mic: null, ai: null };
+      const maybeResolve = () => { if (done.mic && done.ai) resolve(done); };
+
+      if (this.micRecorder) {
+        this.micRecorder.onstop = () => {
+          const type = this.micRecorder.mimeType || 'audio/webm';
+          this.micBlob = new Blob(this.micChunks, { type });
+          done.mic = { blob: this.micBlob, mime: type };
+          this.micRecorder = null; this.micChunks = [];
+          maybeResolve();
+        };
+        this.micRecorder.stop();
+      } else { done.mic = { blob: null, mime: null }; }
+
+      if (this.aiRecorder) {
+        this.aiRecorder.onstop = () => {
+          const type = this.aiRecorder.mimeType || 'audio/webm';
+          this.aiBlob = new Blob(this.aiChunks, { type });
+          done.ai = { blob: this.aiBlob, mime: type };
+          this.aiRecorder = null; this.aiChunks = [];
+          maybeResolve();
+        };
+        this.aiRecorder.stop();
+      } else { done.ai = { blob: null, mime: null }; }
+    });
+  }
+
   determineInitialEmotion() {
     if (!this.scenario || !this.clientBackground) return '';
     const scenario = this.scenario.toLowerCase();
@@ -245,7 +304,7 @@ Voice & Prosody Guidelines:
 
   // Optional: manual reminder to keep the role
   remindClientRole() {
-    if (!this.dataChannel || this.dataChannel.readyState !== 'open') return;
+    if (!this.dataChannel || this.dataChannel.readyState !== 'open')) return;
     this.dataChannel.send(JSON.stringify({
       type: 'session.update',
       session: {
@@ -267,6 +326,13 @@ Voice & Prosody Guidelines:
     if (this.recorder && this.recorder.state !== 'inactive') {
       try { this.recorder.stop(); } catch {}
     }
+    if (this.micRecorder && this.micRecorder.state !== 'inactive') {
+      try { this.micRecorder.stop(); } catch {}
+    }
+    if (this.aiRecorder && this.aiRecorder.state !== 'inactive') {
+      try { this.aiRecorder.stop(); } catch {}
+    }
+
     if (this.localStream) {
       this.localStream.getTracks().forEach(track => track.stop());
       this.localStream = null;

@@ -1,6 +1,6 @@
 const express = require('express');
 const cors = require('cors');
-const multer = require('multer');            // <-- for file upload
+const multer = require('multer');            // for file upload
 require('dotenv').config();
 
 const app = express();
@@ -58,6 +58,7 @@ app.post('/api/get-ephemeral-key', async (req, res) => {
       body: JSON.stringify({
         model: 'gpt-4o-realtime-preview-2025-06-03',
         voice: 'ballad'
+        // (Optional) You can also inject the same role-contract instructions here if you want redundancy.
       })
     });
 
@@ -148,6 +149,52 @@ app.post('/api/transcribe', upload.single('audio'), async (req, res) => {
   } catch (e) {
     console.error('Transcription exception:', e);
     res.status(500).json({ error: 'transcription failed' });
+  }
+});
+
+// ---- Dual Transcription (labeled counselor/client) ----
+app.post('/api/transcribe-dual', upload.fields([
+  { name: 'audio_mic', maxCount: 1 },
+  { name: 'audio_ai',  maxCount: 1 }
+]), async (req, res) => {
+  try {
+    const OPENAI_KEY = (req.body.apiKey || '').trim();
+    const language = req.body.language;
+    if (!OPENAI_KEY) return res.status(400).json({ error: 'API key required' });
+
+    const micFile = req.files?.audio_mic?.[0];
+    const aiFile  = req.files?.audio_ai?.[0];
+    if (!micFile || !aiFile) return res.status(400).json({ error: 'audio_mic and audio_ai are required' });
+
+    const transcribeOne = async (file) => {
+      const blob = new Blob([file.buffer], { type: file.mimetype || 'audio/webm' });
+      const form = new FormData();
+      form.append('file', blob, file.originalname || 'audio.webm');
+      form.append('model', 'gpt-4o-mini-transcribe');
+      if (language && language !== 'auto') form.append('language', language);
+
+      const r = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${OPENAI_KEY}` },
+        body: form
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data?.error?.message || 'transcription failed');
+      return data.text || '';
+    };
+
+    const [counselorText, clientText] = await Promise.all([
+      transcribeOne(micFile),
+      transcribeOne(aiFile)
+    ]);
+
+    res.json({
+      counselor: counselorText,
+      client: clientText
+    });
+  } catch (e) {
+    console.error('transcribe-dual error:', e);
+    res.status(500).json({ error: 'dual transcription failed' });
   }
 });
 
