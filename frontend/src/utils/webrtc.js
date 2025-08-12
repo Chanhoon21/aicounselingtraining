@@ -36,7 +36,7 @@ export class WebRTCManager {
       this.peerConnection = new RTCPeerConnection({
         iceServers: [
           { urls: 'stun:stun.l.google.com:19302' },
-          { urls: 'stun:stun1.l.google.com:19302' }
+        { urls: 'stun:stun1.l.google.com:19302' }
         ]
       });
 
@@ -304,7 +304,7 @@ Voice & Prosody Guidelines:
 
   // Optional: manual reminder to keep the role
   remindClientRole() {
-    if (!this.dataChannel || this.dataChannel.readyState !== 'open')) return;
+    if (!this.dataChannel || this.dataChannel.readyState !== 'open') return;
     this.dataChannel.send(JSON.stringify({
       type: 'session.update',
       session: {
