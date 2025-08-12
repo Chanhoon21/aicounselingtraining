@@ -76,7 +76,7 @@ export class WebRTCManager {
           type: 'response.create',
           response: {
             modalities: ['audio','text'],
-            instructions: `Start with a greeting and briefly explain why you came for counseling, in English (US). ${initialEmotion}`
+            instructions: `Start with a greeting with big sighs in English (US). ${initialEmotion}`
           }
         }));
       });
