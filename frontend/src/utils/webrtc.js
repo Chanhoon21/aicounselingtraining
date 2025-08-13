@@ -12,6 +12,9 @@ export class WebRTCManager {
     this.scenario = null;
     this.clientBackground = null;
 
+    // verbosity control: 'terse' | 'normal' | 'chatty'
+    this.verbosity = 'terse';
+
     // recording (mixed)
     this.recCtx = null;
     this.recDest = null;
@@ -27,6 +30,26 @@ export class WebRTCManager {
     this.aiBlob = null;
   }
 
+  setVerbosity(mode) {
+    if (['terse','normal','chatty'].includes(mode)) {
+      this.verbosity = mode;
+      // live nudge to keep responses at the selected length
+      this.remindBrevity();
+    }
+  }
+
+  brevityRuleText() {
+    switch (this.verbosity) {
+      case 'terse':
+        return `Keep each turn to ONE short sentence (≈5–12 words). Only add a second short sentence if explicitly asked to elaborate.`;
+      case 'chatty':
+        return `You may use 2–3 short sentences (max ~45 words total), but stop promptly.`;
+      case 'normal':
+      default:
+        return `Keep it brief: 1–2 short sentences (max ~25 words total).`;
+    }
+  }
+
   async initializeConnection(ephemeralKey, scenario, clientBackground) {
     try {
       this.scenario = scenario;
@@ -36,7 +59,7 @@ export class WebRTCManager {
       this.peerConnection = new RTCPeerConnection({
         iceServers: [
           { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' }
+          { urls: 'stun:stun1.l.google.com:19302' }
         ]
       });
 
@@ -72,16 +95,17 @@ export class WebRTCManager {
       this.dataChannel = this.peerConnection.createDataChannel('oai-events');
       this.dataChannel.addEventListener('open', () => {
         console.log('Data channel open');
-        // 1) Apply session instructions (role contract + English policy)
+        // 1) Apply session instructions (role contract + English policy + brevity)
         this.sendSessionUpdate();
-        // 2) First reply: ONLY greet (no reason yet), in English
+        // 2) First reply: ONLY greet with a big sigh (no reason yet), in English
         const initialEmotion = this.determineInitialEmotion();
+        const brevity = this.brevityRuleText();
         this.dataChannel.send(JSON.stringify({
           type: 'response.create',
           response: {
             modalities: ['audio', 'text'],
             instructions:
-              `You are the CLIENT. The human is the COUNSELOR. For your first turn, only greet with a noticeable sigh (e.g., *sigh* or audible exhale) in English (US). Keep it one brief line. Do NOT explain why you came yet. ${initialEmotion}`
+              `You are the CLIENT. The human is the COUNSELOR. For your first turn, only greet with a noticeable sigh (e.g., *sigh* or audible exhale) in English (US). Keep it one brief line. Do NOT explain why you came yet. ${initialEmotion} ${brevity}`
           }
         }));
       });
@@ -126,13 +150,14 @@ export class WebRTCManager {
   sendSessionUpdate() {
     if (this.dataChannel && this.dataChannel.readyState === 'open' &&
         this.scenario && this.clientBackground) {
+      const brevity = this.brevityRuleText();
       const instructions =
 `You are the CLIENT in a mental‑health counseling session. The human user is the COUNSELOR.
 
 Role Contract (must follow at all times):
 - Speak ONLY as the client in first-person (“I ...”).
 - Do NOT give advice, interpretations, or therapist-style questions unless the counselor explicitly asks you to.
-- Keep responses short and conversational (1–3 sentences) unless asked to elaborate.
+- ${brevity}
 - If you accidentally switch into a counselor/AI voice, immediately switch back to the client role.
 - No meta-commentary about being an AI or a model.
 
@@ -155,6 +180,16 @@ Voice & Prosody Guidelines:
         session: { instructions }
       }));
     }
+  }
+
+  // Soft reminder to keep it brief
+  remindBrevity() {
+    if (!this.dataChannel || this.dataChannel.readyState !== 'open') return;
+    const brevity = this.brevityRuleText();
+    this.dataChannel.send(JSON.stringify({
+      type: 'session.update',
+      session: { instructions: `Reminder: ${brevity}` }
+    }));
   }
 
   playRemoteAudio() {
@@ -292,12 +327,13 @@ Voice & Prosody Guidelines:
       neutral: "even pace, clear and calm; natural conversational flow"
     };
     const style = emotionalStyles[emotion] || emotionalStyles['neutral'];
+    const brevity = this.brevityRuleText();
     this.dataChannel.send(JSON.stringify({
       type: 'response.create',
       response: {
         modalities: ['audio', 'text'],
         instructions:
-          `You are the CLIENT (not the counselor). Reply in English (US) with this emotional tone: ${style}. Keep it 1–3 sentences, first-person, no advice or therapist-style questions unless asked.`
+          `You are the CLIENT (not the counselor). Reply in English (US) with this emotional tone: ${style}. ${brevity} First-person only; no advice or therapist-style questions unless asked.`
       }
     }));
   }
@@ -309,7 +345,7 @@ Voice & Prosody Guidelines:
       type: 'session.update',
       session: {
         instructions:
-          'Reminder: Stay in the CLIENT role in first-person. Do NOT act as the counselor. Keep replies short.'
+          'Reminder: Stay in the CLIENT role in first-person. Do NOT act as the counselor.'
       }
     }));
   }

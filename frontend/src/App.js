@@ -60,6 +60,9 @@ function App() {
   const [micBlob, setMicBlob] = useState(null);
   const [aiBlob, setAiBlob] = useState(null);
 
+  // Client verbosity control
+  const [clientVerbosity, setClientVerbosity] = useState('terse'); // 'terse' | 'normal' | 'chatty'
+
   // Load scenarios
   useEffect(() => { fetchScenarios(); }, []);
 
@@ -142,6 +145,9 @@ function App() {
     if (!userApiKey.trim()) return showSnackbar('Please enter your OpenAI API key.', 'warning');
 
     try {
+      // push verbosity into the engine before connect
+      webrtcManager.setVerbosity(clientVerbosity);
+
       showSnackbar('Connecting to AI client...', 'info');
       const response = await fetch(`${API_BASE_URL}/get-ephemeral-key`, {
         method: 'POST',
@@ -382,6 +388,25 @@ function App() {
                 helperText="Your OpenAI API key is required to use this service"
                 error={!userApiKey.trim()}
               />
+
+              {/* Client Verbosity */}
+              <TextField
+                select
+                label="Client verbosity"
+                value={clientVerbosity}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setClientVerbosity(v);
+                  webrtcManager.setVerbosity(v);
+                }}
+                fullWidth
+                sx={{ mb: 2 }}
+                helperText="How long the client should typically speak"
+              >
+                <MenuItem value="terse">Terse (1 short sentence)</MenuItem>
+                <MenuItem value="normal">Normal (1–2 short sentences)</MenuItem>
+                <MenuItem value="chatty">Chatty (2–3 sentences)</MenuItem>
+              </TextField>
 
               {/* Transcription Language (optional) */}
               <TextField
