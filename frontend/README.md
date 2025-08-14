@@ -68,3 +68,46 @@ This section has moved here: [https://facebook.github.io/create-react-app/docs/d
 ### `npm run build` fails to minify
 
 This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
+
+### Security feature
+
+Implemented Features
+
+User Identification System**
+
+   * Automatically generate a unique ID for each user
+   * Store the user ID in local storage to ensure session persistence
+   * Display the user ID in the AppBar (partially masked for security)
+User-Specific Scenario Separation**
+
+   * **Default Scenarios**: Accessible to all users (Depression, Anxiety, Relationship Issues)
+   * **Personal Scenarios**: Only visible to the user who created them
+   * Add a `userId` field to scenarios to distinguish ownership
+
+Scenario Management Functions**
+
+   * **Create**: Allow users to create and save scenarios individually
+   * **Read**: Display default scenarios + scenarios created by the current user
+   * **Delete**: Only allow deletion of scenarios created by the current user
+   * Visual distinction with a “My Scenarios” label and a delete button
+
+Backend API Enhancements**
+
+   * `POST /api/create-user`: Generate a new user ID
+   * `POST /api/save-scenario`: Save a scenario with the associated user ID
+   * `GET /api/scenarios?userId=xxx`: Retrieve scenarios for a specific user
+   * `DELETE /api/scenarios/:id?userId=xxx`: Delete a scenario for a specific user
+
+Frontend UI Improvements**
+
+   * Add a delete button to scenario cards
+   * Indicate user-specific scenarios
+   * Use a confirmation dialog to prevent accidental deletions
+   * Display user information
+
+Security and Privacy Protection**
+
+   * Complete data isolation for each user
+   * User identification based on local storage
+   * No personal information stored on the server
+
