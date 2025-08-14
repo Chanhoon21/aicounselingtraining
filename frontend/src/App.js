@@ -24,7 +24,8 @@ import {
   PlayArrow,
   Stop,
   Psychology,
-  VolumeUp
+  VolumeUp,
+  Delete
 } from '@mui/icons-material';
 import { webrtcManager } from './utils/webrtc';
 import './App.css';
@@ -46,6 +47,7 @@ function App() {
   const [showCustomDialog, setShowCustomDialog] = useState(false);
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'info' });
   const [userApiKey, setUserApiKey] = useState('');
+  const [userId, setUserId] = useState(''); // 사용자 ID 추가
 
   // Conversation log (AI text) + recording/transcription
   const [log, setLog] = useState([]);           // {role:'ai'|'session_transcript'|'client'|'counselor', text, t}
@@ -63,8 +65,38 @@ function App() {
   // Client verbosity control
   const [clientVerbosity, setClientVerbosity] = useState('terse'); // 'terse' | 'normal' | 'chatty'
 
-  // Load scenarios
-  useEffect(() => { fetchScenarios(); }, []);
+  // Load scenarios and initialize user
+  useEffect(() => { 
+    initializeUser();
+  }, []);
+
+  // 사용자 초기화
+  const initializeUser = async () => {
+    try {
+      // 로컬 스토리지에서 사용자 ID 확인
+      let storedUserId = localStorage.getItem('userId');
+      
+      if (!storedUserId) {
+        // 새 사용자 생성
+        const response = await fetch(`${API_BASE_URL}/create-user`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' }
+        });
+        
+        if (response.ok) {
+          const data = await response.json();
+          storedUserId = data.userId;
+          localStorage.setItem('userId', storedUserId);
+        }
+      }
+      
+      setUserId(storedUserId);
+      fetchScenarios(storedUserId);
+    } catch (error) {
+      console.error('User initialization error:', error);
+      showSnackbar('사용자 초기화에 실패했습니다.', 'error');
+    }
+  };
 
   // WebRTC callbacks
   useEffect(() => {
@@ -106,9 +138,9 @@ function App() {
   const showSnackbar = (message, severity = 'info') => setSnackbar({ open: true, message, severity });
   const handleCloseSnackbar = () => setSnackbar({ ...snackbar, open: false });
 
-  const fetchScenarios = async () => {
+  const fetchScenarios = async (userId) => {
     try {
-      const response = await fetch(`${API_BASE_URL}/scenarios`);
+      const response = await fetch(`${API_BASE_URL}/scenarios?userId=${userId}`);
       const data = await response.json();
       setScenarios(data);
     } catch (error) {
@@ -119,12 +151,41 @@ function App() {
 
   const handleScenarioSelect = (scenario) => setSelectedScenario(scenario);
 
+  const handleScenarioDelete = async (scenarioId) => {
+    if (!userId) return;
+    
+    try {
+      const response = await fetch(`${API_BASE_URL}/scenarios/${scenarioId}?userId=${userId}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      
+      if (response.ok) {
+        // 시나리오 목록에서 제거
+        setScenarios(prev => prev.filter(s => s.id !== scenarioId));
+        
+        // 현재 선택된 시나리오가 삭제된 경우 선택 해제
+        if (selectedScenario && selectedScenario.id === scenarioId) {
+          setSelectedScenario(null);
+        }
+        
+        showSnackbar('시나리오가 삭제되었습니다.', 'success');
+      } else {
+        const error = await response.json();
+        showSnackbar(error.error || '시나리오 삭제에 실패했습니다.', 'error');
+      }
+    } catch (error) {
+      console.error('Scenario delete error:', error);
+      showSnackbar('시나리오 삭제에 실패했습니다.', 'error');
+    }
+  };
+
   const handleCustomScenarioSubmit = async () => {
     try {
       const response = await fetch(`${API_BASE_URL}/save-scenario`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(customScenario),
+        body: JSON.stringify({ ...customScenario, userId }),
       });
       if (response.ok) {
         const saved = await response.json();
@@ -314,7 +375,12 @@ function App() {
           <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
             AI Counseling Training App
           </Typography>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+            {userId && (
+              <Typography variant="body2" sx={{ color: 'white' }}>
+                사용자: {userId.substring(0, 8)}...
+              </Typography>
+            )}
             <VolumeUp sx={{ color: getConnectionStatusColor() }} />
             <Typography variant="body2" sx={{ color: getConnectionStatusColor() }}>
               {connectionState === 'connected' ? 'Connected' :
@@ -330,6 +396,9 @@ function App() {
           <Grid item xs={12} md={6}>
             <Paper sx={{ p: 3, height: 'fit-content' }}>
               <Typography variant="h5" gutterBottom>Scenario Selection</Typography>
+              <Alert severity="info" sx={{ mb: 2 }}>
+                기본 시나리오는 모든 사용자가 사용할 수 있으며, 새로 만든 시나리오는 본인만 볼 수 있습니다.
+              </Alert>
               <Button variant="contained" color="primary" onClick={() => setShowCustomDialog(true)} sx={{ mb: 2 }} fullWidth>
                 Create New Scenario
               </Button>
@@ -343,11 +412,37 @@ function App() {
                       borderColor: selectedScenario?.id === scenario.id ? 'primary.main' : 'grey.300',
                       '&:hover': { transform: 'translateY(-2px)', boxShadow: 2, transition: 'all 0.3s ease' }
                     }}
-                    onClick={() => setSelectedScenario(scenario)}
                   >
                     <CardContent>
-                      <Typography variant="h6" gutterBottom>{scenario.title}</Typography>
-                      <Typography variant="body2" color="text.secondary">{scenario.scenario}</Typography>
+                      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                        <Box 
+                          sx={{ flex: 1, cursor: 'pointer' }}
+                          onClick={() => setSelectedScenario(scenario)}
+                        >
+                          <Typography variant="h6" gutterBottom>{scenario.title}</Typography>
+                          <Typography variant="body2" color="text.secondary">{scenario.scenario}</Typography>
+                          {scenario.userId && scenario.userId !== 'default' && (
+                            <Typography variant="caption" color="primary" sx={{ mt: 1, display: 'block' }}>
+                              내가 만든 시나리오
+                            </Typography>
+                          )}
+                        </Box>
+                        {scenario.userId && scenario.userId !== 'default' && (
+                          <Button
+                            size="small"
+                            color="error"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (window.confirm('이 시나리오를 삭제하시겠습니까?')) {
+                                handleScenarioDelete(scenario.id);
+                              }
+                            }}
+                            sx={{ ml: 1 }}
+                          >
+                            <Delete fontSize="small" />
+                          </Button>
+                        )}
+                      </Box>
                     </CardContent>
                   </Card>
                 ))}

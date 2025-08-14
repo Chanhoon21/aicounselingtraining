@@ -6,11 +6,26 @@ An interactive AI-powered counseling training application that allows users to p
 
 - **Real-time Voice Communication**: WebRTC-based voice interaction with AI
 - **Scenario Management**: Pre-built and custom counseling scenarios
+- **User-specific Scenarios**: Each user can create and manage their own scenarios privately
 - **Emotion-Aware AI**: AI responds with appropriate emotional tones based on scenarios
 - **Dynamic Voice Modulation**: Real-time adjustment of AI's emotional state
 - **English Interface**: Full English UI and voice responses
 - **OpenAI Realtime API**: Powered by GPT-4o Realtime with expressive voice synthesis
 - **User API Key Support**: Each user provides their own OpenAI API key for privacy and cost control
+
+## User Management
+
+### Scenario Privacy
+- **Default Scenarios**: Pre-built scenarios available to all users
+- **Personal Scenarios**: Custom scenarios created by users are private and only visible to the creator
+- **User Identification**: Each user gets a unique ID stored locally for session persistence
+- **Scenario Management**: Users can create, view, and delete their own scenarios
+
+### How It Works
+1. **First Visit**: A unique user ID is automatically generated and stored in your browser
+2. **Scenario Creation**: When you create a new scenario, it's associated with your user ID
+3. **Private Access**: Only you can see and manage scenarios you've created
+4. **Session Persistence**: Your user ID persists across browser sessions using local storage
 
 ## Tech Stack
 
@@ -62,23 +77,30 @@ An interactive AI-powered counseling training application that allows users to p
 
 ## Usage
 
-1. **Enter API Key**: Provide your OpenAI API key in the designated field
-2. **Select a Scenario**: Choose from pre-built scenarios or create a custom one
-3. **Start Session**: Click "Start Session" to begin counseling
-4. **Practice Counseling**: Speak through your microphone to interact with the AI client
-5. **Adjust Emotions**: Use emotion buttons to modify the AI's emotional state during the session
-6. **End Session**: Click "End Session" when finished
+1. **User Initialization**: Your unique user ID is automatically created on first visit
+2. **Enter API Key**: Provide your OpenAI API key in the designated field
+3. **Select a Scenario**: Choose from default scenarios or create a custom one
+4. **Create Custom Scenarios**: Add your own counseling scenarios (private to you)
+5. **Manage Scenarios**: Delete your custom scenarios as needed
+6. **Start Session**: Click "Start Session" to begin counseling
+7. **Practice Counseling**: Speak through your microphone to interact with the AI client
+8. **Adjust Emotions**: Use emotion buttons to modify the AI's emotional state during the session
+9. **End Session**: Click "End Session" when finished
 
 ## API Endpoints
 
+- `POST /api/create-user`: Generate a new user ID
 - `POST /api/get-ephemeral-key`: Generate OpenAI Realtime session (requires user API key)
-- `POST /api/save-scenario`: Save custom counseling scenario
-- `GET /api/scenarios`: Retrieve available scenarios
+- `POST /api/save-scenario`: Save custom counseling scenario (requires user ID)
+- `GET /api/scenarios`: Retrieve available scenarios (filtered by user ID)
+- `DELETE /api/scenarios/:id`: Delete a custom scenario (requires user ID)
 - `GET /api/health`: Server health check
 
 ## Security & Privacy
 
 - **API Key Privacy**: Your OpenAI API key is only used to create temporary sessions and is never stored
+- **User Isolation**: Each user's custom scenarios are completely isolated from other users
+- **Local Storage**: User IDs are stored locally in your browser for session persistence
 - **No Server Storage**: The server does not store any personal data or API keys
 - **HTTPS Recommended**: For production use, ensure you're using HTTPS
 

@@ -7,27 +7,38 @@ const app = express();
 const port = process.env.PORT || 3001;
 const upload = multer();
 
-// In-memory scenario storage (demo)
+// In-memory scenario storage with user separation
 let scenarios = [
   {
     id: 1,
     title: 'Depression Counseling',
     scenario: 'Recent loss of motivation and sleep problems',
-    clientBackground: '20s graduate student, academic stress and social withdrawal'
+    clientBackground: '20s graduate student, academic stress and social withdrawal',
+    userId: 'default' // 기본 시나리오는 모든 사용자가 볼 수 있음
   },
   {
     id: 2,
     title: 'Anxiety Disorder Counseling',
     scenario: 'Severe anxiety before presentations',
-    clientBackground: '30s male, workplace evaluation stress'
+    clientBackground: '30s male, workplace evaluation stress',
+    userId: 'default'
   },
   {
     id: 3,
     title: 'Relationship Issues Counseling',
     scenario: 'Interpersonal conflicts at workplace',
-    clientBackground: '40s female, stress from conflicts with colleagues'
+    clientBackground: '40s female, stress from conflicts with colleagues',
+    userId: 'default'
   }
 ];
+
+// 사용자별 시나리오 저장소
+let userScenarios = {};
+
+// 사용자 ID 생성 함수
+function generateUserId() {
+  return 'user_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+}
 
 // CORS
 app.use(cors({
@@ -36,6 +47,22 @@ app.use(cors({
 }));
 
 app.use(express.json());
+
+// 사용자 ID 생성 엔드포인트
+app.post('/api/create-user', (req, res) => {
+  try {
+    const userId = generateUserId();
+    userScenarios[userId] = [];
+    res.json({ 
+      success: true, 
+      userId: userId,
+      message: '새 사용자가 생성되었습니다.'
+    });
+  } catch (error) {
+    console.error('Create user error:', error);
+    res.status(500).json({ error: '사용자 생성에 실패했습니다.' });
+  }
+});
 
 // Ephemeral key (user must supply API key)
 app.post('/api/get-ephemeral-key', async (req, res) => {
@@ -85,20 +112,31 @@ app.post('/api/get-ephemeral-key', async (req, res) => {
   }
 });
 
-// Save scenario
+// Save scenario (사용자별로 저장)
 app.post('/api/save-scenario', (req, res) => {
   try {
-    const { title, scenario, clientBackground } = req.body || {};
+    const { title, scenario, clientBackground, userId } = req.body || {};
     if (!title?.trim() || !scenario?.trim()) {
       return res.status(400).json({ error: 'title and scenario are required' });
     }
+    if (!userId) {
+      return res.status(400).json({ error: 'userId is required' });
+    }
+
     const newScenario = {
       id: Date.now(),
       title: title.trim(),
       scenario: scenario.trim(),
-      clientBackground: (clientBackground || '').trim()
+      clientBackground: (clientBackground || '').trim(),
+      userId: userId
     };
-    scenarios.push(newScenario);
+
+    // 사용자별 시나리오 배열에 추가
+    if (!userScenarios[userId]) {
+      userScenarios[userId] = [];
+    }
+    userScenarios[userId].push(newScenario);
+
     res.json({
       success: true,
       message: '시나리오가 저장되었습니다.',
@@ -110,13 +148,58 @@ app.post('/api/save-scenario', (req, res) => {
   }
 });
 
-// List scenarios
+// List scenarios (사용자별로 조회)
 app.get('/api/scenarios', (req, res) => {
   try {
-    res.json(scenarios);
+    const { userId } = req.query;
+    
+    if (!userId) {
+      // 기본 시나리오만 반환
+      const defaultScenarios = scenarios.filter(s => s.userId === 'default');
+      res.json(defaultScenarios);
+      return;
+    }
+
+    // 기본 시나리오 + 사용자별 시나리오 반환
+    const defaultScenarios = scenarios.filter(s => s.userId === 'default');
+    const userSpecificScenarios = userScenarios[userId] || [];
+    const allScenarios = [...defaultScenarios, ...userSpecificScenarios];
+    
+    res.json(allScenarios);
   } catch (error) {
     console.error('List scenarios error:', error);
     res.status(500).json({ error: '시나리오 조회에 실패했습니다.' });
+  }
+});
+
+// 사용자별 시나리오 삭제
+app.delete('/api/scenarios/:scenarioId', (req, res) => {
+  try {
+    const { scenarioId } = req.params;
+    const { userId } = req.query;
+
+    if (!userId) {
+      return res.status(400).json({ error: 'userId is required' });
+    }
+
+    if (!userScenarios[userId]) {
+      return res.status(404).json({ error: '사용자를 찾을 수 없습니다.' });
+    }
+
+    const scenarioIndex = userScenarios[userId].findIndex(s => s.id == scenarioId);
+    if (scenarioIndex === -1) {
+      return res.status(404).json({ error: '시나리오를 찾을 수 없습니다.' });
+    }
+
+    const deletedScenario = userScenarios[userId].splice(scenarioIndex, 1)[0];
+    res.json({
+      success: true,
+      message: '시나리오가 삭제되었습니다.',
+      scenario: deletedScenario
+    });
+  } catch (error) {
+    console.error('Delete scenario error:', error);
+    res.status(500).json({ error: '시나리오 삭제에 실패했습니다.' });
   }
 });
 
