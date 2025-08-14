@@ -397,7 +397,7 @@ function App() {
             <Paper sx={{ p: 3, height: 'fit-content' }}>
               <Typography variant="h5" gutterBottom>Scenario Selection</Typography>
               <Alert severity="info" sx={{ mb: 2 }}>
-                기본 시나리오는 모든 사용자가 사용할 수 있으며, 새로 만든 시나리오는 본인만 볼 수 있습니다.
+                The default scenarios are available to all users, while newly created scenarios are visible only to you.
               </Alert>
               <Button variant="contained" color="primary" onClick={() => setShowCustomDialog(true)} sx={{ mb: 2 }} fullWidth>
                 Create New Scenario
