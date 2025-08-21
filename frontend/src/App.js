@@ -17,7 +17,9 @@ import {
   DialogActions,
   Alert,
   Snackbar,
-  MenuItem
+  MenuItem,
+  Switch,
+  FormControlLabel
 } from '@mui/material';
 import {
   Mic,
@@ -47,56 +49,58 @@ function App() {
   const [showCustomDialog, setShowCustomDialog] = useState(false);
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'info' });
   const [userApiKey, setUserApiKey] = useState('');
-  const [userId, setUserId] = useState(''); // 사용자 ID 추가
+  const [userId, setUserId] = useState(''); // 사용자 ID
 
-  // Conversation log (AI text) + recording/transcription
-  const [log, setLog] = useState([]);           // {role:'ai'|'session_transcript'|'client'|'counselor', text, t}
-  const aiBuffers = useRef({});                  // assemble AI text per response
+  // Conversation log (one list; we’ll label speaker)
+  // roles used: 'client' | 'counselor' | 'session_transcript' (bulk)
+  const [log, setLog] = useState([]);
+  const aiBuffers = useRef({}); // assemble AI text per response
+
+  // Recording/transcription
   const [isSavingAudio, setIsSavingAudio] = useState(false);
   const [audioUrl, setAudioUrl] = useState(null);
   const [audioBlob, setAudioBlob] = useState(null);
   const [transcriptLanguage, setTranscriptLanguage] = useState('auto'); // 'auto' | 'en' | 'ko'
 
-  // Dual recording state
-  const [dualRecOn, setDualRecOn] = useState(false);
-  const [micBlob, setMicBlob] = useState(null);
-  const [aiBlob, setAiBlob] = useState(null);
-
-  // Client verbosity control
+  // Client verbosity
   const [clientVerbosity, setClientVerbosity] = useState('terse'); // 'terse' | 'normal' | 'chatty'
 
-  // Load scenarios and initialize user
-  useEffect(() => { 
-    initializeUser();
-  }, []);
+  // Live counselor STT toggle/state
+  const [liveUserSTT, setLiveUserSTT] = useState(true);
+  const [sttAvailable, setSttAvailable] = useState(false);
+  const sttRecRef = useRef(null);
+  const sttActiveRef = useRef(false);
 
-  // 사용자 초기화
+  // Load scenarios & initialize user
+  useEffect(() => { initializeUser(); }, []);
+
   const initializeUser = async () => {
     try {
-      // 로컬 스토리지에서 사용자 ID 확인
       let storedUserId = localStorage.getItem('userId');
-      
       if (!storedUserId) {
-        // 새 사용자 생성
         const response = await fetch(`${API_BASE_URL}/create-user`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' }
         });
-        
         if (response.ok) {
           const data = await response.json();
           storedUserId = data.userId;
           localStorage.setItem('userId', storedUserId);
         }
       }
-      
-      setUserId(storedUserId);
-      fetchScenarios(storedUserId);
+      setUserId(storedUserId || '');
+      fetchScenarios(storedUserId || '');
     } catch (error) {
       console.error('User initialization error:', error);
       showSnackbar('사용자 초기화에 실패했습니다.', 'error');
     }
   };
+
+  // Check Web Speech API availability
+  useEffect(() => {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    setSttAvailable(!!SR);
+  }, []);
 
   // WebRTC callbacks
   useEffect(() => {
@@ -108,14 +112,15 @@ function App() {
       } else if (state === 'disconnected') {
         setIsConnected(false);
         setIsRecording(false);
+        stopUserSTT(); // ensure mic STT stops
       }
     };
 
     webrtcManager.onTrack = (event) => {
-      console.log('AI track:', event);
+      // remote audio arrives here
     };
 
-    // Assemble AI text from Realtime events
+    // AI (client) text from Realtime events
     webrtcManager.onMessage = (data) => {
       if (!data?.type) return;
       if (data.type === 'response.output_text.delta') {
@@ -125,22 +130,23 @@ function App() {
       if (data.type === 'response.completed') {
         const id = data.response_id || data.item_id || 'default';
         const text = (aiBuffers.current[id] || '').trim();
-        if (text) setLog(prev => [...prev, { role: 'ai', text, t: Date.now() }]);
+        if (text) setLog(prev => [...prev, { role: 'client', text, t: Date.now() }]);
         delete aiBuffers.current[id];
       }
     };
 
     return () => {
       webrtcManager.stopConnection();
+      stopUserSTT();
     };
   }, []);
 
   const showSnackbar = (message, severity = 'info') => setSnackbar({ open: true, message, severity });
   const handleCloseSnackbar = () => setSnackbar({ ...snackbar, open: false });
 
-  const fetchScenarios = async (userId) => {
+  const fetchScenarios = async (uid) => {
     try {
-      const response = await fetch(`${API_BASE_URL}/scenarios?userId=${userId}`);
+      const response = await fetch(`${API_BASE_URL}/scenarios?userId=${uid}`);
       const data = await response.json();
       setScenarios(data);
     } catch (error) {
@@ -153,22 +159,14 @@ function App() {
 
   const handleScenarioDelete = async (scenarioId) => {
     if (!userId) return;
-    
     try {
       const response = await fetch(`${API_BASE_URL}/scenarios/${scenarioId}?userId=${userId}`, {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' }
       });
-      
       if (response.ok) {
-        // 시나리오 목록에서 제거
         setScenarios(prev => prev.filter(s => s.id !== scenarioId));
-        
-        // 현재 선택된 시나리오가 삭제된 경우 선택 해제
-        if (selectedScenario && selectedScenario.id === scenarioId) {
-          setSelectedScenario(null);
-        }
-        
+        if (selectedScenario && selectedScenario.id === scenarioId) setSelectedScenario(null);
         showSnackbar('시나리오가 삭제되었습니다.', 'success');
       } else {
         const error = await response.json();
@@ -201,12 +199,57 @@ function App() {
     }
   };
 
+  // ---- Live counselor STT (single mixed transcript with speaker labels) ----
+  const startUserSTT = () => {
+    if (!sttAvailable || sttActiveRef.current || !liveUserSTT) return;
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) return;
+    const r = new SR();
+    r.lang = transcriptLanguage === 'en' ? 'en-US' : (transcriptLanguage === 'ko' ? 'ko-KR' : 'en-US'); // default to EN; change if you prefer
+    r.interimResults = true;
+    let finalText = '';
+
+    r.onresult = (e) => {
+      let interim = '';
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const text = e.results[i][0].transcript;
+        if (e.results[i].isFinal) finalText += text;
+        else interim += text;
+      }
+      // (Optional) show interim in UI if you want
+    };
+
+    r.onerror = () => { /* ignore minor errors */ };
+    r.onend = () => {
+      sttActiveRef.current = false;
+      if (finalText.trim()) {
+        setLog(prev => [...prev, { role: 'counselor', text: finalText.trim(), t: Date.now() }]);
+      }
+      // Restart if still in session & toggle on (continuous effect)
+      if (isRecording && liveUserSTT) {
+        startUserSTT();
+      }
+    };
+
+    r.start();
+    sttRecRef.current = r;
+    sttActiveRef.current = true;
+  };
+
+  const stopUserSTT = () => {
+    try {
+      sttRecRef.current?.stop();
+    } catch {}
+    sttActiveRef.current = false;
+  };
+  // -------------------------------------------------------------------------
+
   const startCounseling = async () => {
     if (!selectedScenario) return showSnackbar('Please select a scenario.', 'warning');
     if (!userApiKey.trim()) return showSnackbar('Please enter your OpenAI API key.', 'warning');
 
     try {
-      // push verbosity into the engine before connect
+      // push verbosity into engine before connect
       webrtcManager.setVerbosity(clientVerbosity);
 
       showSnackbar('Connecting to AI client...', 'info');
@@ -228,6 +271,8 @@ function App() {
           selectedScenario.clientBackground
         );
         setIsRecording(true);
+        // kick off live counselor STT if enabled and available
+        if (liveUserSTT && sttAvailable) startUserSTT();
         showSnackbar('Counseling session started. Please speak through the microphone.', 'success');
       } else {
         const errorMessage = data.error || 'Connection failed.';
@@ -242,13 +287,11 @@ function App() {
 
   const stopCounseling = () => {
     webrtcManager.stopConnection();
+    stopUserSTT();
     setIsSavingAudio(false);
-    setDualRecOn(false);
     if (audioUrl) { try { URL.revokeObjectURL(audioUrl); } catch {} }
     setAudioUrl(null);
     setAudioBlob(null);
-    setMicBlob(null);
-    setAiBlob(null);
     setIsRecording(false);
     setIsConnected(false);
     setEphemeralKey(null);
@@ -299,7 +342,7 @@ function App() {
     URL.revokeObjectURL(url);
   };
 
-  // Transcribe the mixed recording with gpt-4o-mini-transcribe
+  // Transcribe the mixed recording (bulk, unlabeled) — we keep for convenience
   const transcribeRecording = async () => {
     if (!audioBlob) return showSnackbar('No recorded audio to transcribe.', 'warning');
     if (!userApiKey.trim()) return showSnackbar('Enter your OpenAI API key first.', 'warning');
@@ -327,34 +370,6 @@ function App() {
     } catch (e) {
       console.error(e);
       showSnackbar('Transcription request failed.', 'error');
-    }
-  };
-
-  // Transcribe both (labeled counselor/client)
-  const transcribeDual = async () => {
-    if (!micBlob || !aiBlob) return showSnackbar('Record dual tracks first.', 'warning');
-    if (!userApiKey.trim()) return showSnackbar('Enter your OpenAI API key first.', 'warning');
-    try {
-      const form = new FormData();
-      form.append('apiKey', userApiKey.trim());
-      form.append('audio_mic', micBlob, 'counselor.webm');
-      form.append('audio_ai', aiBlob, 'client.webm');
-      if (transcriptLanguage && transcriptLanguage !== 'auto') {
-        form.append('language', transcriptLanguage);
-      }
-      const r = await fetch(`${API_BASE_URL}/transcribe-dual`, { method: 'POST', body: form });
-      const data = await r.json();
-      if (!r.ok) {
-        console.error('Dual transcription error:', data);
-        return showSnackbar(data.error || 'Dual transcription failed.', 'error');
-      }
-      const now = Date.now();
-      if (data.client)    setLog(prev => [...prev, { role: 'client',    text: (data.client||'').trim(),    t: now }]);
-      if (data.counselor) setLog(prev => [...prev, { role: 'counselor', text: (data.counselor||'').trim(), t: now }]);
-      showSnackbar('Dual transcription complete (labeled).', 'success');
-    } catch (e) {
-      console.error(e);
-      showSnackbar('Dual transcription request failed.', 'error');
     }
   };
 
@@ -510,13 +525,31 @@ function App() {
                 value={transcriptLanguage}
                 onChange={(e) => setTranscriptLanguage(e.target.value)}
                 fullWidth
-                sx={{ mb: 2 }}
+                sx={{ mb: 1 }}
                 helperText="Choose a language for transcription (auto by default)"
               >
                 <MenuItem value="auto">Auto</MenuItem>
                 <MenuItem value="en">English (en)</MenuItem>
                 <MenuItem value="ko">Korean (ko)</MenuItem>
               </TextField>
+
+              {/* Live counselor STT toggle */}
+              <FormControlLabel
+                control={
+                  <Switch
+                    checked={liveUserSTT}
+                    onChange={(e) => {
+                      const on = e.target.checked;
+                      setLiveUserSTT(on);
+                      if (on && isRecording && sttAvailable) startUserSTT();
+                      if (!on) stopUserSTT();
+                    }}
+                    color="primary"
+                  />
+                }
+                label={`Live counselor transcript ${sttAvailable ? '' : '(not supported in this browser)'}`}
+                sx={{ mb: 2 }}
+              />
 
               <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
                 <Button
@@ -576,7 +609,6 @@ function App() {
 
                   {/* Recording & Downloads */}
                   <Box sx={{ mt: 2, display: 'flex', gap: 2, flexWrap: 'wrap' }}>
-                    {/* Mixed track controls */}
                     <Button
                       variant="outlined"
                       onClick={isSavingAudio ? stopSavingAudio : startSavingAudio}
@@ -607,55 +639,7 @@ function App() {
                       fullWidth
                       onClick={transcribeRecording}
                     >
-                      Transcribe Mixed (gpt-4o-mini-transcribe)
-                    </Button>
-
-                    {/* Dual track controls */}
-                    <Button
-                      variant="outlined"
-                      onClick={async () => {
-                        try {
-                          webrtcManager.startDualRecording();
-                          setDualRecOn(true);
-                          showSnackbar('Dual recording started (Counselor/Client).', 'info');
-                        } catch (e) {
-                          console.error(e);
-                          showSnackbar('Cannot start dual recording.', 'error');
-                        }
-                      }}
-                      disabled={!isRecording || dualRecOn}
-                      fullWidth
-                    >
-                      Start Dual Recording (separate)
-                    </Button>
-
-                    <Button
-                      variant="outlined"
-                      onClick={async () => {
-                        try {
-                          const out = await webrtcManager.stopDualRecording();
-                          setDualRecOn(false);
-                          if (out?.mic?.blob) setMicBlob(out.mic.blob);
-                          if (out?.ai?.blob) setAiBlob(out.ai.blob);
-                          showSnackbar('Dual recording ready.', 'success');
-                        } catch (e) {
-                          console.error(e);
-                          showSnackbar('Failed to stop dual recording.', 'error');
-                        }
-                      }}
-                      disabled={!dualRecOn}
-                      fullWidth
-                    >
-                      Stop Dual Recording
-                    </Button>
-
-                    <Button
-                      variant="outlined"
-                      onClick={transcribeDual}
-                      disabled={!micBlob || !aiBlob}
-                      fullWidth
-                    >
-                      Transcribe Both (labeled)
+                      Transcribe Mixed (bulk)
                     </Button>
 
                     <Button variant="text" onClick={() => downloadTranscript('txt')} disabled={!log.length}>
