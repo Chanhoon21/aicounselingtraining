@@ -51,18 +51,18 @@ function App() {
   const [userApiKey, setUserApiKey] = useState('');
   const [userId, setUserId] = useState('');
 
-  // 하나의 로그에 화자 라벨을 붙여 누적합니다.
+  // 단일 로그 (화자 라벨 포함)
   // roles: 'client' | 'counselor' | 'session_transcript'
   const [log, setLog] = useState([]);
   const aiBuffers = useRef({}); // Realtime 텍스트 델타 조립용
 
-  // 혼합 녹음(한 파일) + 사후 전사용
+  // 혼합 녹음(사후 전사용)
   const [isSavingAudio, setIsSavingAudio] = useState(false);
   const [audioUrl, setAudioUrl] = useState(null);
   const [audioBlob, setAudioBlob] = useState(null);
   const [transcriptLanguage, setTranscriptLanguage] = useState('auto'); // 'auto'|'en'|'ko'
 
-  // 내담자 발화 길이(webrtcManager가 처리)
+  // 내담자 응답 길이 정책 (webrtcManager가 반영)
   const [clientVerbosity, setClientVerbosity] = useState('terse'); // 'terse'|'normal'|'chatty'
 
   // A안: 브라우저 실시간 STT (상담자 화자)
@@ -113,11 +113,11 @@ function App() {
       } else if (state === 'disconnected') {
         setIsConnected(false);
         setIsRecording(false);
-        stopUserSTT();  // 세션 끊길 때 STT 종료
+        stopUserSTT();  // 세션 종료 시 STT도 종료
       }
     };
 
-    // AI(내담자) 응답 텍스트를 Realtime 이벤트로 수신 → client로 라벨링
+    // AI(내담자) 응답 텍스트를 Realtime 이벤트로 수신 → client 라벨로 기록
     webrtcManager.onMessage = (data) => {
       if (!data?.type) return;
       if (data.type === 'response.output_text.delta') {
@@ -196,7 +196,7 @@ function App() {
     }
   };
 
-  // ====== A안: 브라우저 실시간 STT (연속 인식) ======
+  // ===== A안: 브라우저 실시간 STT(연속) — 최종 결과만 기록 =====
   const startUserSTT = () => {
     if (!sttAvailable || sttActiveRef.current || !liveUserSTT) return;
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -206,33 +206,30 @@ function App() {
     r.lang = transcriptLanguage === 'en' ? 'en-US'
          : transcriptLanguage === 'ko' ? 'ko-KR'
          : 'en-US';                // 기본 EN
-    r.interimResults = true;
-    r.continuous = true;           // ★ 연속 인식
+    r.interimResults = true;       // interim은 받되
+    r.continuous = true;           // 연속 인식
     r.maxAlternatives = 1;
 
-    let buffer = '';
-
+    // ✅ 변경 포인트: interim은 기록하지 않고, 최종(isFinal)만 기록
     r.onresult = (e) => {
       for (let i = e.resultIndex; i < e.results.length; i++) {
         const txt = e.results[i][0].transcript;
         if (e.results[i].isFinal) {
-          const finalText = (buffer + ' ' + txt).trim();
+          const finalText = (txt || '').trim();
           if (finalText) {
             setLog(prev => [...prev, { role: 'counselor', text: finalText, t: Date.now() }]);
           }
-          buffer = '';
-        } else {
-          buffer = (buffer + ' ' + txt).trim();
         }
       }
     };
 
     r.onerror = (err) => {
       console.error('[STT] error:', err);
+      // 마이크 권한/네트워크 이슈 등
     };
 
     r.onend = () => {
-      // 일부 브라우저는 일정 타임아웃으로 onend 발생 → 세션 중이면 재시작
+      // 일부 브라우저는 타임아웃으로 end 발생 → 세션 중이면 재시작
       if (isRecording && liveUserSTT) {
         try { r.start(); }
         catch { setTimeout(() => { try { r.start(); } catch {} }, 300); }
@@ -254,7 +251,7 @@ function App() {
     try { sttRecRef.current?.stop(); } catch {}
     sttActiveRef.current = false;
   };
-  // ================================================
+  // =================================================
 
   const startCounseling = async () => {
     if (!selectedScenario) return showSnackbar('Please select a scenario.', 'warning');
@@ -282,7 +279,7 @@ function App() {
           selectedScenario.clientBackground
         );
         setIsRecording(true);
-        // 상담자 STT 시작 (가능/토글 on이면)
+        // 세션 시작 시 STT도 시작
         if (liveUserSTT && sttAvailable) startUserSTT();
         showSnackbar('Counseling session started. Please speak through the microphone.', 'success');
       } else {
@@ -336,7 +333,7 @@ function App() {
     }
   };
 
-  // 혼합 전사(사후) — 필요한 경우만 실행
+  // 혼합 전사(사후) — 필요 시 사용
   const transcribeRecording = async () => {
     if (!audioBlob) return showSnackbar('No recorded audio to transcribe.', 'warning');
     if (!userApiKey.trim()) return showSnackbar('Enter your OpenAI API key first.', 'warning');
