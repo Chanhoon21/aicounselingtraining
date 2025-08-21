@@ -49,29 +49,29 @@ function App() {
   const [showCustomDialog, setShowCustomDialog] = useState(false);
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'info' });
   const [userApiKey, setUserApiKey] = useState('');
-  const [userId, setUserId] = useState(''); // 사용자 ID
+  const [userId, setUserId] = useState('');
 
-  // Conversation log (one list; we’ll label speaker)
-  // roles used: 'client' | 'counselor' | 'session_transcript' (bulk)
+  // 하나의 로그에 화자 라벨을 붙여 누적합니다.
+  // roles: 'client' | 'counselor' | 'session_transcript'
   const [log, setLog] = useState([]);
-  const aiBuffers = useRef({}); // assemble AI text per response
+  const aiBuffers = useRef({}); // Realtime 텍스트 델타 조립용
 
-  // Recording/transcription
+  // 혼합 녹음(한 파일) + 사후 전사용
   const [isSavingAudio, setIsSavingAudio] = useState(false);
   const [audioUrl, setAudioUrl] = useState(null);
   const [audioBlob, setAudioBlob] = useState(null);
-  const [transcriptLanguage, setTranscriptLanguage] = useState('auto'); // 'auto' | 'en' | 'ko'
+  const [transcriptLanguage, setTranscriptLanguage] = useState('auto'); // 'auto'|'en'|'ko'
 
-  // Client verbosity
-  const [clientVerbosity, setClientVerbosity] = useState('terse'); // 'terse' | 'normal' | 'chatty'
+  // 내담자 발화 길이(webrtcManager가 처리)
+  const [clientVerbosity, setClientVerbosity] = useState('terse'); // 'terse'|'normal'|'chatty'
 
-  // Live counselor STT toggle/state
+  // A안: 브라우저 실시간 STT (상담자 화자)
   const [liveUserSTT, setLiveUserSTT] = useState(true);
   const [sttAvailable, setSttAvailable] = useState(false);
   const sttRecRef = useRef(null);
   const sttActiveRef = useRef(false);
 
-  // Load scenarios & initialize user
+  // 사용자 초기화 + 시나리오 로드
   useEffect(() => { initializeUser(); }, []);
 
   const initializeUser = async () => {
@@ -96,13 +96,14 @@ function App() {
     }
   };
 
-  // Check Web Speech API availability
+  // Web Speech API 가용성 체크
   useEffect(() => {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     setSttAvailable(!!SR);
+    if (!SR) console.warn('[STT] This browser does not support Web Speech API.');
   }, []);
 
-  // WebRTC callbacks
+  // WebRTC 콜백
   useEffect(() => {
     webrtcManager.onConnectionStateChange = (state) => {
       setConnectionState(state);
@@ -112,15 +113,11 @@ function App() {
       } else if (state === 'disconnected') {
         setIsConnected(false);
         setIsRecording(false);
-        stopUserSTT(); // ensure mic STT stops
+        stopUserSTT();  // 세션 끊길 때 STT 종료
       }
     };
 
-    webrtcManager.onTrack = (event) => {
-      // remote audio arrives here
-    };
-
-    // AI (client) text from Realtime events
+    // AI(내담자) 응답 텍스트를 Realtime 이벤트로 수신 → client로 라벨링
     webrtcManager.onMessage = (data) => {
       if (!data?.type) return;
       if (data.type === 'response.output_text.delta') {
@@ -199,58 +196,72 @@ function App() {
     }
   };
 
-  // ---- Live counselor STT (single mixed transcript with speaker labels) ----
+  // ====== A안: 브라우저 실시간 STT (연속 인식) ======
   const startUserSTT = () => {
     if (!sttAvailable || sttActiveRef.current || !liveUserSTT) return;
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SR) return;
+
     const r = new SR();
-    r.lang = transcriptLanguage === 'en' ? 'en-US' : (transcriptLanguage === 'ko' ? 'ko-KR' : 'en-US'); // default to EN; change if you prefer
+    r.lang = transcriptLanguage === 'en' ? 'en-US'
+         : transcriptLanguage === 'ko' ? 'ko-KR'
+         : 'en-US';                // 기본 EN
     r.interimResults = true;
-    let finalText = '';
+    r.continuous = true;           // ★ 연속 인식
+    r.maxAlternatives = 1;
+
+    let buffer = '';
 
     r.onresult = (e) => {
-      let interim = '';
       for (let i = e.resultIndex; i < e.results.length; i++) {
-        const text = e.results[i][0].transcript;
-        if (e.results[i].isFinal) finalText += text;
-        else interim += text;
+        const txt = e.results[i][0].transcript;
+        if (e.results[i].isFinal) {
+          const finalText = (buffer + ' ' + txt).trim();
+          if (finalText) {
+            setLog(prev => [...prev, { role: 'counselor', text: finalText, t: Date.now() }]);
+          }
+          buffer = '';
+        } else {
+          buffer = (buffer + ' ' + txt).trim();
+        }
       }
-      // (Optional) show interim in UI if you want
     };
 
-    r.onerror = () => { /* ignore minor errors */ };
+    r.onerror = (err) => {
+      console.error('[STT] error:', err);
+    };
+
     r.onend = () => {
-      sttActiveRef.current = false;
-      if (finalText.trim()) {
-        setLog(prev => [...prev, { role: 'counselor', text: finalText.trim(), t: Date.now() }]);
-      }
-      // Restart if still in session & toggle on (continuous effect)
+      // 일부 브라우저는 일정 타임아웃으로 onend 발생 → 세션 중이면 재시작
       if (isRecording && liveUserSTT) {
-        startUserSTT();
+        try { r.start(); }
+        catch { setTimeout(() => { try { r.start(); } catch {} }, 300); }
+      } else {
+        sttActiveRef.current = false;
       }
     };
 
-    r.start();
-    sttRecRef.current = r;
-    sttActiveRef.current = true;
+    try {
+      r.start();                      // 사용자 클릭(세션 시작) 이후 호출됨
+      sttRecRef.current = r;
+      sttActiveRef.current = true;
+    } catch (e) {
+      console.error('[STT] start failed:', e);
+    }
   };
 
   const stopUserSTT = () => {
-    try {
-      sttRecRef.current?.stop();
-    } catch {}
+    try { sttRecRef.current?.stop(); } catch {}
     sttActiveRef.current = false;
   };
-  // -------------------------------------------------------------------------
+  // ================================================
 
   const startCounseling = async () => {
     if (!selectedScenario) return showSnackbar('Please select a scenario.', 'warning');
     if (!userApiKey.trim()) return showSnackbar('Please enter your OpenAI API key.', 'warning');
 
     try {
-      // push verbosity into engine before connect
-      webrtcManager.setVerbosity(clientVerbosity);
+      webrtcManager.setVerbosity(clientVerbosity); // 길이 정책 반영
 
       showSnackbar('Connecting to AI client...', 'info');
       const response = await fetch(`${API_BASE_URL}/get-ephemeral-key`, {
@@ -271,7 +282,7 @@ function App() {
           selectedScenario.clientBackground
         );
         setIsRecording(true);
-        // kick off live counselor STT if enabled and available
+        // 상담자 STT 시작 (가능/토글 on이면)
         if (liveUserSTT && sttAvailable) startUserSTT();
         showSnackbar('Counseling session started. Please speak through the microphone.', 'success');
       } else {
@@ -298,7 +309,7 @@ function App() {
     showSnackbar('Counseling session ended.', 'info');
   };
 
-  // Mixed audio recording controls (mic + AI)
+  // 혼합 녹음 컨트롤(한 파일)
   const startSavingAudio = () => {
     try {
       webrtcManager.startMixedRecording();
@@ -325,24 +336,7 @@ function App() {
     }
   };
 
-  // Download transcript (.txt/.json)
-  const downloadTranscript = (fmt = 'txt') => {
-    if (!log.length) return showSnackbar('No transcript yet.', 'warning');
-    if (fmt === 'json') {
-      const blob = new Blob([JSON.stringify(log, null, 2)], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a'); a.href = url; a.download = 'transcript.json'; a.click();
-      URL.revokeObjectURL(url);
-      return;
-    }
-    const lines = log.map(x => `[${new Date(x.t).toLocaleString()}] ${x.role.toUpperCase()}: ${x.text}`);
-    const blob = new Blob([lines.join('\n')], { type: 'text/plain;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a'); a.href = url; a.download = 'transcript.txt'; a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  // Transcribe the mixed recording (bulk, unlabeled) — we keep for convenience
+  // 혼합 전사(사후) — 필요한 경우만 실행
   const transcribeRecording = async () => {
     if (!audioBlob) return showSnackbar('No recorded audio to transcribe.', 'warning');
     if (!userApiKey.trim()) return showSnackbar('Enter your OpenAI API key first.', 'warning');
@@ -371,6 +365,22 @@ function App() {
       console.error(e);
       showSnackbar('Transcription request failed.', 'error');
     }
+  };
+
+  const downloadTranscript = (fmt = 'txt') => {
+    if (!log.length) return showSnackbar('No transcript yet.', 'warning');
+    if (fmt === 'json') {
+      const blob = new Blob([JSON.stringify(log, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = url; a.download = 'transcript.json'; a.click();
+      URL.revokeObjectURL(url);
+      return;
+    }
+    const lines = log.map(x => `[${new Date(x.t).toLocaleString()}] ${x.role.toUpperCase()}: ${x.text}`);
+    const blob = new Blob([lines.join('\n')], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = 'transcript.txt'; a.click();
+    URL.revokeObjectURL(url);
   };
 
   const getConnectionStatusColor = () => {
@@ -430,7 +440,7 @@ function App() {
                   >
                     <CardContent>
                       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                        <Box 
+                        <Box
                           sx={{ flex: 1, cursor: 'pointer' }}
                           onClick={() => setSelectedScenario(scenario)}
                         >
@@ -484,7 +494,7 @@ function App() {
                 </Box>
               )}
 
-              {/* API Key Input */}
+              {/* API Key */}
               <TextField
                 type="password"
                 label="OpenAI API Key *"
@@ -518,7 +528,7 @@ function App() {
                 <MenuItem value="chatty">Chatty (2–3 sentences)</MenuItem>
               </TextField>
 
-              {/* Transcription Language (optional) */}
+              {/* Transcription Language */}
               <TextField
                 select
                 label="Transcription language"
